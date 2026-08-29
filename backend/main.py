@@ -3,11 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sys
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from collections import deque
 import asyncio
 import difflib
 from dotenv import load_dotenv
+import json
+from github import Github, Auth
+from github.GithubException import GithubException
+import random
+import string
 
 # Load environment variables
 load_dotenv()
@@ -20,10 +25,23 @@ from app.graph_engine.parser import build_graph
 
 app = FastAPI(title="BlastRadius Backend API")
 
-# Setup CORS to allow everything for local testing, including websockets
+# Setup CORS to allow everything for local testing and Vite frontend
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+]
+
+# Allow overriding/adding via environment for deployment
+if os.getenv("CORS_ORIGINS"):
+    origins.extend(os.getenv("CORS_ORIGINS").split(","))
+    
+# Or just allow all for hackathon ease if preferred:
+origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,12 +71,18 @@ async def get_graph(
     include_tests: bool = Query(False, description="Include tests directory files")
 ):
     if not url.startswith("https://github.com/") and not url.startswith("http://github.com/"):
-        raise HTTPException(status_code=400, detail="Only GitHub URLs are supported currently.")
+        raise HTTPException(
+            status_code=400, 
+            detail={"error": "Invalid URL", "message": "Only GitHub URLs are supported currently."}
+        )
         
     try:
         return get_or_build_graph(url, include_tests)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing repository: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={"error": "Processing Error", "message": f"Error cloning or parsing repository: {str(e)}"}
+        )
 
 @app.get("/api/blast-radius")
 async def get_blast_radius(
@@ -66,12 +90,18 @@ async def get_blast_radius(
     node_id: str = Query(..., description="Node ID to calculate blast radius for")
 ):
     if not repo.startswith("https://github.com/") and not repo.startswith("http://github.com/"):
-        raise HTTPException(status_code=400, detail="Only GitHub URLs are supported currently.")
+        raise HTTPException(
+            status_code=400, 
+            detail={"error": "Invalid URL", "message": "Only GitHub URLs are supported currently."}
+        )
         
     try:
         graph_data = get_or_build_graph(repo, include_tests=False)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing repository: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={"error": "Processing Error", "message": f"Error cloning or parsing repository: {str(e)}"}
+        )
         
     # Verify node_id exists in the graph
     node_exists = any(n["id"] == node_id for n in graph_data["nodes"])
@@ -117,6 +147,8 @@ async def get_blast_radius(
 class MigrateRequest(BaseModel):
     node_id: str
     repo: str
+    force_bad_migration: bool = False
+    skip_llm_for_test: bool = False
 
 # Active websocket connections for migration tasks
 # In a real app, you'd use a more robust task management/message queue system
@@ -126,20 +158,32 @@ migration_data: Dict[str, Dict[str, Any]] = {}
 @app.post("/api/migrate")
 async def start_migration(req: MigrateRequest):
     if not req.repo.startswith("https://github.com/") and not req.repo.startswith("http://github.com/"):
-        raise HTTPException(status_code=400, detail="Only GitHub URLs are supported currently.")
+        raise HTTPException(
+            status_code=400, 
+            detail={"error": "Invalid URL", "message": "Only GitHub URLs are supported currently."}
+        )
     
     # Pre-fetch the graph and ensure node exists
     try:
         graph_data = get_or_build_graph(req.repo, include_tests=False)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing repository: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail={"error": "Processing Error", "message": f"Error cloning or parsing repository: {str(e)}"}
+        )
         
     node = next((n for n in graph_data["nodes"] if n["id"] == req.node_id), None)
     if not node:
-        raise HTTPException(status_code=404, detail="Node not found in graph.")
+        raise HTTPException(
+            status_code=404, 
+            detail={"error": "Node not found", "message": f"Node '{req.node_id}' does not exist in the graph."}
+        )
         
     if not node.get("source"):
-        raise HTTPException(status_code=400, detail="Source code not available for this node.")
+        raise HTTPException(
+            status_code=400, 
+            detail={"error": "Source missing", "message": "Source code not available for this node."}
+        )
 
     # Store data for the websocket to pick up
     task_id = f"{req.repo}::{req.node_id}"
@@ -147,7 +191,9 @@ async def start_migration(req: MigrateRequest):
     migration_data[task_id] = {
         "repo": req.repo,
         "node_id": req.node_id,
-        "source": node["source"]
+        "source": node["source"],
+        "force_bad_migration": req.force_bad_migration,
+        "skip_llm_for_test": req.skip_llm_for_test
     }
     
     return {"status": "started", "task_id": task_id}
@@ -163,6 +209,15 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
         await websocket.close()
         return
         
+    force_bad = migration_data[task_id].get("force_bad_migration", False)
+    skip_llm = migration_data[task_id].get("skip_llm_for_test", False)
+    
+    # Only allow forcing bad migration if debug mode is active
+    debug_mode = os.getenv("DEBUG_MODE", "false").lower() == "true"
+    if force_bad and not debug_mode:
+        force_bad = False
+    if skip_llm and not debug_mode:
+        skip_llm = False
     source_code = migration_data[task_id]["source"]
     
     try:
@@ -194,21 +249,26 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                 "Return ONLY the new function code, no explanation, no markdown fences."
             )
             
-            response = client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=[prompt, source_code],
-            )
-            
-            new_code = response.text.strip()
-            
-            # Remove markdown fences if the model still added them
-            if new_code.startswith("```python"):
-                new_code = new_code[9:]
-            elif new_code.startswith("```"):
-                new_code = new_code[3:]
-            if new_code.endswith("```"):
-                new_code = new_code[:-3]
-            new_code = new_code.strip()
+            if force_bad:
+                 new_code = "def make_str(value):\n    if isinstance(value, bytes):\n        return value.decode('utf-8')\n    return str(value) + '_SABOTAGED'\n"
+            elif skip_llm:
+                 new_code = source_code # Just use the exact same code to guarantee it passes
+            else:
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[prompt, source_code],
+                )
+                
+                new_code = response.text.strip()
+                
+                # Remove markdown fences if the model still added them
+                if new_code.startswith("```python"):
+                    new_code = new_code[9:]
+                elif new_code.startswith("```"):
+                    new_code = new_code[3:]
+                if new_code.endswith("```"):
+                    new_code = new_code[:-3]
+                new_code = new_code.strip()
             
             # Compute unified diff
             diff_lines = list(difflib.unified_diff(
@@ -233,14 +293,300 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                 "status": "error",
                 "message": f"Gemini API error: {str(e)}"
             })
-             # Don't close immediately, let client see error
+             return # Stop pipeline on error
+
+        # Phase 2: Verify
+        await websocket.send_json({"stage": "verify", "status": "running", "step": "generating_inputs"})
+        
+        try:
+            if force_bad or skip_llm:
+                 test_inputs = [{"args": [1, 2], "kwargs": {}, "mock_self": None}]
+            else:
+                prompt = (
+                    f"You are a test input generator. "
+                    f"Given this Python function, generate 3 representative, realistic test cases.\n"
+                    f"Return ONLY a JSON list of dictionaries. Each dictionary must have:\n"
+                    f" - 'args': list of positional arguments (excluding 'self')\n"
+                    f" - 'kwargs': dict of keyword arguments\n"
+                    f" - 'mock_self': dict of instance attributes (ONLY if this is a method that requires 'self', otherwise null. Check the signature!).\n\n"
+                    f"Example for `def add(a, b):`: `[{{\"args\": [1, 2], \"kwargs\": {{}}, \"mock_self\": null}}]`\n"
+                    f"Example for `def format_eta(self):`: `[{{\"args\": [], \"kwargs\": {{}}, \"mock_self\": {{\"eta_known\": True, \"eta\": 3600}}}}]`\n\n"
+                    f"Source code:\n{source_code}"
+                )
+                
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[prompt],
+                )
+                
+                inputs_text = response.text.strip()
+                if inputs_text.startswith("```json"):
+                     inputs_text = inputs_text[7:]
+                elif inputs_text.startswith("```"):
+                     inputs_text = inputs_text[3:]
+                if inputs_text.endswith("```"):
+                     inputs_text = inputs_text[:-3]
+                
+                test_inputs = json.loads(inputs_text.strip())
+                if not isinstance(test_inputs, list):
+                    test_inputs = [[]] # Fallback
+                
+        except Exception as e:
+             await websocket.send_json({
+                "stage": "verify",
+                "status": "error",
+                "message": f"Failed to generate test inputs: {str(e)}"
+            })
+             return
              
-        # Phase 2: Verify (Stub)
-        await websocket.send_json({"stage": "verify", "status": "stub"})
+        # Run tests
+        all_passed = True
+        failed_reasons = []
         
-        # Phase 3: Decide (Stub)
-        await websocket.send_json({"stage": "decide", "status": "stub"})
+        func_name = node_id.split(":")[-1]
         
+        for i, tc in enumerate(test_inputs):
+             await websocket.send_json({"stage": "verify", "status": "running", "test_index": i, "total": len(test_inputs)})
+             
+             try:
+                 old_result = None
+                 old_error = None
+                 new_result = None
+                 new_error = None
+                 
+                 args = tc.get("args", []) if isinstance(tc, dict) else tc
+                 kwargs = tc.get("kwargs", {}) if isinstance(tc, dict) else {}
+                 mock_self_data = tc.get("mock_self") if isinstance(tc, dict) else None
+                 
+                 class MockSelf:
+                     def __init__(self, **kw):
+                         self.__dict__.update(kw)
+                 
+                 # Prepare safe execution environment (restricted globals)
+                 
+                 # Common imports and stubs needed for basic functions like echo to not crash
+                 # on simple missing names if they aren't fully self-contained.
+                 # The LLM test generator uses ast.get_source_segment which might just grab
+                 # the function but lack imports like 'sys', 't', 'typing', etc.
+                 # In a true sandbox, we'd include module globals, but here we provide a dummy dict.
+                 
+                 import sys
+                 class DummyContext:
+                     pass
+                     
+                 safe_globals = {
+                     "__builtins__": __builtins__,
+                     "sys": sys,
+                     "t": DummyContext(), 
+                     "t.cast": lambda x, y: y,
+                     "t.IO": Any,
+                     "t.Any": Any,
+                 }
+                 
+                 # Exec old code
+                 old_locals = {}
+                 try:
+                     exec(source_code, safe_globals, old_locals)
+                     if func_name in old_locals:
+                         if mock_self_data is not None:
+                             instance = MockSelf(**mock_self_data)
+                             old_result = old_locals[func_name](instance, *args, **kwargs)
+                         else:
+                             old_result = old_locals[func_name](*args, **kwargs)
+                     else:
+                         old_error = "Function not found in old code"
+                 except Exception as exc:
+                     old_error = type(exc).__name__ + ": " + str(exc)
+                     
+                 # Exec new code
+                 new_locals = {}
+                 try:
+                     exec(new_code, safe_globals, new_locals)
+                     if func_name in new_locals:
+                         if mock_self_data is not None:
+                             instance = MockSelf(**mock_self_data)
+                             new_result = new_locals[func_name](instance, *args, **kwargs)
+                         else:
+                             new_result = new_locals[func_name](*args, **kwargs)
+                     else:
+                         new_error = "Function not found in new code"
+                 except Exception as exc:
+                     new_error = type(exc).__name__ + ": " + str(exc)
+                     
+                 # Compare results
+                 if old_error or new_error:
+                     if old_error == new_error:
+                         outcome = "matched_exception"
+                         passed = True
+                     else:
+                         outcome = "mismatch"
+                         passed = False
+                 else:
+                     if old_result == new_result:
+                         outcome = "matched_success"
+                         passed = True
+                     else:
+                         outcome = "mismatch"
+                         passed = False
+                     
+                 if not passed:
+                     all_passed = False
+                     failed_reasons.append(f"Input: {tc} | Old: {old_error or old_result} | New: {new_error or new_result}")
+                     
+                 await websocket.send_json({
+                     "stage": "verify",
+                     "status": "done",
+                     "test_index": i,
+                     "passed": passed,
+                     "outcome": outcome,
+                     "input": repr(tc),
+                     "old_output": repr(old_error or old_result),
+                     "new_output": repr(new_error or new_result)
+                 })
+                 
+             except Exception as e:
+                 all_passed = False
+                 failed_reasons.append(f"Test runner crashed on input {inputs}: {str(e)}")
+                 await websocket.send_json({
+                     "stage": "verify",
+                     "status": "done",
+                     "test_index": i,
+                     "passed": False,
+                     "input": repr(inputs),
+                     "old_output": "Error",
+                     "new_output": str(e)
+                 })
+                 
+        # Phase 3: Decide
+        if not all_passed:
+             await websocket.send_json({
+                 "stage": "decide",
+                 "status": "done",
+                 "action": "blocked",
+                 "reason": "Tests failed: " + "; ".join(failed_reasons)
+             })
+        else:
+             # Try opening a PR
+             github_token = os.getenv("GITHUB_TOKEN")
+             if not github_token:
+                 await websocket.send_json({
+                     "stage": "decide",
+                     "status": "done",
+                     "action": "pr_failed",
+                     "diff": diff_text,
+                     "reason": "GITHUB_TOKEN environment variable is not set."
+                 })
+                 return
+                 
+             try:
+                 # Extract owner/repo
+                 repo_path = repo.replace("https://github.com/", "").replace("http://github.com/", "")
+                 if repo_path.endswith(".git"):
+                     repo_path = repo_path[:-4]
+                     
+                 auth = Auth.Token(github_token)
+                 g = Github(auth=auth)
+                 
+                 gh_repo = g.get_repo(repo_path)
+                 
+                 # This is a simplification. To actually commit the file, we'd need to:
+                 # 1. Get the current file content from the repo
+                 # 2. Apply the replacement (replace old_code with new_code)
+                 # 3. Create a commit
+                 # For the hackathon context, we'll try to just open a PR if we have write access,
+                 # but since we're using a public repo (pallets/click), we likely don't have write access.
+                 # To test the happy path, we'll simulate the PR creation if we don't have write access.
+                 
+                 try:
+                     # Check if we can push (this will throw if we don't have permissions)
+                     # gh_repo.get_collaborator_permission(g.get_user().login)
+                     
+                     # Generate a branch name
+                     rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                     branch_name = f"refactor-{func_name}-{rand_suffix}"
+                     
+                     # Get default branch SHA
+                     default_branch = gh_repo.default_branch
+                     ref = gh_repo.get_git_ref(f"heads/{default_branch}")
+                     
+                     # We skip actually committing the file because AST replacement requires knowing the exact
+                     # file layout which is complex without a full syntax tree mutator. 
+                     # Instead, we just attempt to create a branch to prove the GitHub API works.
+                     # (In a real scenario, you'd apply the diff and commit).
+                     gh_repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=ref.object.sha)
+                     
+                     # To avoid empty commit PR failures, we'll fetch the target file,
+                     # inject our new code, and push the actual change using the Github API.
+                     # We find the file path from the node_id
+                     file_path = node_id.split(":")[0]
+                     try:
+                         # Get the file contents
+                         file_content = gh_repo.get_contents(file_path, ref=default_branch)
+                         decoded_content = file_content.decoded_content.decode('utf-8')
+                         
+                         # Very basic replacement (assuming the source string is uniquely present)
+                         updated_content = decoded_content.replace(source_code, new_code)
+                         
+                         # If replace didn't work (e.g. whitespace issues), we fallback
+                         if updated_content == decoded_content:
+                             raise Exception("Could not strictly match old code in source file to replace it")
+                             
+                         # Create commit with the updated file
+                         gh_repo.update_file(
+                             path=file_content.path,
+                             message=f"Refactor {func_name}",
+                             content=updated_content,
+                             sha=file_content.sha,
+                             branch=branch_name
+                         )
+                     except Exception as file_e:
+                         # If we can't reliably update the file via API, we'll just fail gracefully
+                         # for the hackathon rather than pushing a broken PR.
+                         await websocket.send_json({
+                             "stage": "decide",
+                             "status": "done",
+                             "action": "pr_failed",
+                             "diff": diff_text,
+                             "reason": f"Could not apply code update via GitHub API: {str(file_e)}"
+                         })
+                         return
+                     
+                     pr = gh_repo.create_pull(
+                         title=f"Refactor {func_name}",
+                         body=f"Automated refactoring of `{func_name}`.\n\n```diff\n{diff_text}\n```",
+                         head=branch_name,
+                         base=default_branch
+                     )
+                     
+                     await websocket.send_json({
+                         "stage": "decide",
+                         "status": "done",
+                         "action": "pr_opened",
+                         "pr_url": pr.html_url
+                     })
+                     
+                 except GithubException as ge:
+                     # Fallback if we don't have permissions (like against pallets/click)
+                     if ge.status in [403, 404]:
+                         await websocket.send_json({
+                             "stage": "decide",
+                             "status": "done",
+                             "action": "pr_failed",
+                             "diff": diff_text,
+                             "reason": f"GitHub API permission denied (likely missing write access to {repo_path})."
+                         })
+                     else:
+                         raise
+                         
+             except Exception as e:
+                 await websocket.send_json({
+                     "stage": "decide",
+                     "status": "done",
+                     "action": "pr_failed",
+                     "diff": diff_text,
+                     "reason": f"GitHub API error: {str(e)}"
+                 })
+                 
     except WebSocketDisconnect:
         print(f"Client disconnected for task {task_id}")
     finally:
