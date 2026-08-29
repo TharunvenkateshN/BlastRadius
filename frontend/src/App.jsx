@@ -7,7 +7,7 @@ import MigrationPanel from './components/MigrationPanel';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 function App() {
-  const [repoUrl, setRepoUrl] = useState('https://github.com/pallets/click');
+  const [repoUrl, setRepoUrl] = useState('https://github.com/TharunvenkateshN/click');
   const [rawNodes, setRawNodes] = useState([]);
   const [rawEdges, setRawEdges] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
