@@ -480,6 +480,25 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                      "new_output": str(e)
                  })
                  
+        # Wait for explicit user approval before touching Decide — the only
+        # phase with a real side effect (opening a GitHub PR). Verify results
+        # are already fully streamed above; this pause is what makes "must
+        # not be automatic" literally true rather than a UI-only delay.
+        await websocket.send_json({
+            "stage": "verify",
+            "status": "complete",
+            "all_passed": all_passed
+        })
+
+        approval = await websocket.receive_json()
+        if approval.get("action") != "approve":
+            await websocket.send_json({
+                "stage": "decide",
+                "status": "done",
+                "action": "rejected"
+            })
+            return
+
         # Phase 3: Decide
         if not all_passed:
              await websocket.send_json({

@@ -95,7 +95,7 @@ function App() {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '300px 1fr 320px',
+        gridTemplateColumns: '300px 1fr auto',
         height: '100vh',
         overflow: 'hidden',
         background: 'var(--bg)',
