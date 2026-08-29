@@ -1,30 +1,46 @@
 import React, { useState } from 'react';
-import { useNodesState, useEdgesState } from '@xyflow/react';
 import { AlertCircle } from 'lucide-react';
 
 import TopBar from './components/TopBar';
-import GraphCanvas, { getLayoutedElements } from './components/GraphCanvas';
+import GraphCanvas from './components/GraphCanvas';
 import MigrationPanel from './components/MigrationPanel';
 
 function App() {
   const [repoUrl, setRepoUrl] = useState('https://github.com/pallets/click');
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [rawNodes, setRawNodes] = useState([]);
+  const [rawEdges, setRawEdges] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [stats, setStats] = useState(null);
   const [blastData, setBlastData] = useState(null);
   const [toastMessage, setToastMessage] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
+  const [hasAnalyzed, setHasAnalyzed] = useState(false);
+  const [showTooltip, setShowTooltip] = useState(true);
+  const [isFocusView, setIsFocusView] = useState(true);
+  const [showFullGraphWarning, setShowFullGraphWarning] = useState(false);
+
+  const getFilteredNodes = (nodes, edges, hubMode) => {
+    if (!hubMode) return nodes;
+    const degreeMap = {};
+    nodes.forEach(n => { degreeMap[n.id] = 0; });
+    edges.forEach(e => {
+      if (degreeMap[e.from] !== undefined) degreeMap[e.from]++;
+      if (degreeMap[e.to] !== undefined) degreeMap[e.to]++;
+    });
+    return nodes.filter(n => (degreeMap[n.id] || 0) >= 5);
+  };
 
   const handleAnalyze = async () => {
     if (!repoUrl) return;
     setLoading(true);
     setError(null);
     setStats(null);
-    setNodes([]);
-    setEdges([]);
+    setRawNodes([]);
+    setRawEdges([]);
     setSelectedNode(null);
+    setShowTooltip(false);
+    setIsFocusView(true); // Reset to Hub View on new search
 
     try {
       const response = await fetch(`http://localhost:8000/api/graph?url=${encodeURIComponent(repoUrl)}&include_tests=false`);
@@ -37,40 +53,16 @@ function App() {
         throw new Error('Invalid graph data received from server');
       }
 
-      const initialNodes = data.nodes.map((node) => ({
-        id: node.id,
-        type: 'custom',
-        data: {
-          label: node.name,
-          file: node.file,
-          type: node.type,
-          fullId: node.id
-        },
-        position: { x: 0, y: 0 } // initial position, overwritten by dagre
-      }));
-
-      const initialEdges = data.edges.map((edge) => ({
-        id: `e-${edge.from}-${edge.to}`,
-        source: edge.from,
-        target: edge.to,
-        type: 'default',
-        animated: false,
-        style: { stroke: '#333355', strokeWidth: 1 },
-        markerEnd: {
-          type: 'arrowclosed',
-          color: '#333355',
-        },
-      }));
-
-      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, initialEdges);
-
-      setNodes(layoutedNodes);
-      setEdges(layoutedEdges);
+      setRawNodes(data.nodes);
+      setRawEdges(data.edges);
+      
+      setHasAnalyzed(true);
+      
       setStats({
-        nodesCount: layoutedNodes.length,
-        edgesCount: layoutedEdges.length
+        nodesCount: data.nodes.length,
+        edgesCount: data.edges.length
       });
-      setBlastData(null); // Reset blast data on new graph analysis
+      setBlastData(null);
     } catch (err) {
       setError(err.message || 'Failed to fetch graph data');
     } finally {
@@ -78,7 +70,23 @@ function App() {
     }
   };
 
-  const handleNodeClick = async (event, node) => {
+  const handleToggleFocusView = () => {
+    if (rawNodes.length === 0) return;
+    
+    if (isFocusView) {
+      // Switching to Full Graph - show modal warning briefly before rendering
+      setShowFullGraphWarning(true);
+      
+      setTimeout(() => {
+        setIsFocusView(false);
+        setShowFullGraphWarning(false);
+      }, 500);
+    } else {
+      setIsFocusView(true);
+    }
+  };
+
+  const handleNodeClick = async (node) => {
     // If clicking the currently selected node, reset it
     if (blastData && blastData.origin === node.id) {
       resetNodeColors();
@@ -88,6 +96,7 @@ function App() {
     // Reset any previous colors first
     resetNodeColors();
     setSelectedNode(node);
+    setShowTooltip(false); // Hide instructional badge
     
     try {
       const response = await fetch(`http://localhost:8000/api/blast-radius?node_id=${encodeURIComponent(node.id)}&repo=${encodeURIComponent(repoUrl)}`);
@@ -102,30 +111,26 @@ function App() {
       }
       
       const data = await response.json();
-      setBlastData(data);
-      animateBlastRadius(data);
+      
+      // Calculate max depth for the stats bar
+      const maxDepth = Object.values(data.depth_map).length > 0 
+        ? Math.max(...Object.values(data.depth_map)) 
+        : 0;
+      
+      setBlastData({
+        ...data,
+        maxDepth,
+        affectedCount: Object.keys(data.depth_map).length
+      });
     } catch (err) {
       console.error("Error fetching blast radius:", err);
       showToast("Failed to fetch blast radius");
     }
   };
 
-  const onPaneClick = () => {
-    resetNodeColors();
-  };
-
   const resetNodeColors = () => {
     setBlastData(null);
     setSelectedNode(null);
-    setNodes(nds => nds.map(n => ({
-      ...n,
-      data: {
-        ...n.data,
-        bgColor: undefined,
-        borderColor: undefined,
-        boxShadow: undefined
-      }
-    })));
   };
 
   const showToast = (message) => {
@@ -133,98 +138,41 @@ function App() {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const animateBlastRadius = (data) => {
-    const { origin, depth_map } = data;
-    
-    // Calculate max depth for the stats bar
-    const maxDepth = Object.values(depth_map).length > 0 
-      ? Math.max(...Object.values(depth_map)) 
-      : 0;
-    
-    setBlastData({
-      ...data,
-      maxDepth,
-      affectedCount: Object.keys(depth_map).length
-    });
-
-    // Update nodes state incrementally with timeouts
-    setNodes(nds => nds.map(n => {
-      if (n.id === origin) {
-        return {
-          ...n,
-          data: {
-            ...n.data,
-            bgColor: '#3a0a14',
-            borderColor: '#FF2D55',
-            boxShadow: '0 0 20px #FF2D55'
-          }
-        };
-      }
-      
-      // We process affected nodes dynamically
-      return n;
-    }));
-
-    // Process each depth level
-    const depthLevels = {};
-    for (const [nodeId, depth] of Object.entries(depth_map)) {
-      if (!depthLevels[depth]) depthLevels[depth] = [];
-      depthLevels[depth].push(nodeId);
-    }
-
-    // Schedule updates for each depth
-    Object.entries(depthLevels).forEach(([depthStr, nodeIds]) => {
-      const depth = parseInt(depthStr);
-      setTimeout(() => {
-        setNodes(currentNodes => currentNodes.map(n => {
-          if (nodeIds.includes(n.id)) {
-            let bgColor, borderColor;
-            if (depth === 1) {
-              bgColor = '#2d1a1a';
-              borderColor = '#FF6B6B';
-            } else if (depth === 2) {
-              bgColor = '#261818';
-              borderColor = '#FF8C8C';
-            } else {
-              bgColor = '#201515';
-              borderColor = '#FFB3B3';
-            }
-
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                bgColor,
-                borderColor
-              }
-            };
-          }
-          return n;
-        }));
-      }, 200 * depth);
-    });
-  };
-
   const handleMigrationSuccess = (nodeId) => {
-    setNodes(nds => nds.map(n => {
+    // We update the underlying raw nodes data so the label shows a checkmark
+    setRawNodes(nds => nds.map(n => {
       if (n.id === nodeId) {
         return {
           ...n,
-          data: {
-            ...n.data,
-            label: n.data.label.startsWith("✓ ") ? n.data.label : "✓ " + n.data.label,
-            bgColor: '#00C853',
-            borderColor: '#00e676',
-            boxShadow: '0 0 15px rgba(0, 200, 83, 0.5)'
-          }
+          name: n.name.startsWith("✓ ") ? n.name : "✓ " + n.name
         };
       }
       return n;
     }));
   };
 
+  const displayNodes = getFilteredNodes(rawNodes, rawEdges, isFocusView);
+
   return (
     <div className="w-full h-screen bg-[#0a0a0a] text-white flex flex-col font-sans">
+      {/* Full Graph Virtual Loading Warning */}
+      {showFullGraphWarning && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[rgba(0,0,0,0.8)] backdrop-blur-sm">
+          <div className="w-12 h-12 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin mb-6"></div>
+          <p className="text-white text-lg font-medium">⚠ Loading full graph ({rawNodes.length} nodes)</p>
+          <p className="text-gray-400 mt-2">This may take a moment...</p>
+        </div>
+      )}
+
+      {/* Full Screen Loading Overlay */}
+      {loading && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#0a0a0a]/90 backdrop-blur-md">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-6"></div>
+          <p className="text-white text-lg font-medium">Analyzing repository...</p>
+          <p className="text-gray-400 mt-2">this may take 30-60 seconds</p>
+        </div>
+      )}
+
       <TopBar 
         repoUrl={repoUrl}
         setRepoUrl={setRepoUrl}
@@ -233,18 +181,12 @@ function App() {
         stats={stats}
         blastData={blastData}
         resetNodeColors={resetNodeColors}
+        isFocusView={isFocusView}
+        onToggleFocusView={handleToggleFocusView}
       />
 
       {/* Main Content Area */}
       <div className="flex-1 relative">
-        {loading && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-sm">
-            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-            <p className="text-gray-300">Cloning and parsing repository...</p>
-            <p className="text-gray-500 text-sm mt-1">this may take 30-60 seconds</p>
-          </div>
-        )}
-
         {error && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-900/50 border border-red-500/50 text-red-200 px-4 py-3 rounded-md flex items-center gap-3 shadow-lg">
             <AlertCircle className="w-5 h-5 text-red-400" />
@@ -258,14 +200,32 @@ function App() {
           </div>
         )}
 
-        <GraphCanvas 
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onNodeClick={handleNodeClick}
-          onPaneClick={onPaneClick}
-        />
+        {!hasAnalyzed && !loading && (
+          <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+            <p className="text-[#4b5563] text-[16px] max-w-md text-center">
+              ← Enter a GitHub repository URL and click Analyze to explore its dependency graph
+            </p>
+          </div>
+        )}
+
+        {hasAnalyzed && (
+          <GraphCanvas 
+            rawNodes={displayNodes}
+            rawEdges={rawEdges}
+            onNodeClick={handleNodeClick}
+            blastRadiusData={blastData}
+          />
+        )}
+        
+        {/* Onboarding Tooltip */}
+        {showTooltip && hasAnalyzed && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-[#1e3a5f] border border-[#3b82f6] rounded-[20px] py-1.5 px-4 shadow-xl text-center flex items-center gap-2 pointer-events-none">
+            <span className="text-xl">👆</span>
+            <p className="text-[#93c5fd] text-[13px] font-medium m-0">
+              Click any node to see its blast radius
+            </p>
+          </div>
+        )}
         
         <MigrationPanel 
           selectedNode={selectedNode}

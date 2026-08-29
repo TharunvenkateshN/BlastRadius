@@ -130,25 +130,54 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
     }
   };
 
-  if (!selectedNode) return null;
+  if (!selectedNode) {
+    return (
+      <div className="fixed right-0 top-0 w-[440px] h-screen bg-[#0a0a0a] border-l border-[#1f2937] z-10 flex flex-col items-center justify-center p-8 text-center animate-slide-in">
+        <div className="text-[48px] mb-4">⚡</div>
+        <h2 className="text-white text-[18px] font-bold mb-2">Select a function</h2>
+        <p className="text-[#6b7280] text-[14px] max-w-[280px] leading-relaxed">
+          Click any node in the graph to inspect it and migrate it safely using AI.
+        </p>
+      </div>
+    );
+  }
+
+  const isSuccess = stageStates.decide && (stageStates.decide.stub || stageStates.decide.action === 'pr_opened');
 
   return (
     <div 
-      className="fixed right-0 top-0 w-[420px] h-screen bg-[#111111] border-l border-[#222222] z-10 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out transform translate-x-0 overflow-hidden"
+      className="fixed right-0 top-0 w-[440px] h-screen bg-[#111111] border-l border-[#222222] z-10 flex flex-col shadow-2xl animate-slide-in overflow-hidden relative"
     >
+      {/* Confetti Animation */}
+      {isSuccess && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden z-50">
+          {[...Array(6)].map((_, i) => (
+            <div 
+              key={i} 
+              className="confetti-piece"
+              style={{
+                left: `${15 + i * 15}%`,
+                backgroundColor: ['#ef4444', '#3b82f6', '#22c55e', '#eab308'][i % 4],
+                animationDelay: `${i * 0.1}s`
+              }}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Header */}
-      <div className="flex-none p-6 border-b border-[#222222] flex justify-between items-start bg-[#161616]">
+      <div className="flex-none p-6 border-b border-[#1f2937] flex justify-between items-start bg-[#0f172a]">
         <div className="min-w-0 pr-4">
-          <h2 className="text-white text-[18px] font-bold truncate" title={selectedNode.data?.label || selectedNode.id}>
+          <h2 className="text-white text-[20px] font-bold truncate" title={selectedNode.data?.label || selectedNode.id}>
             {selectedNode.data?.label || selectedNode.id.split(':').pop()}
           </h2>
-          <p className="text-[#888888] text-[12px] break-all mt-1 leading-tight">
-            {selectedNode.id}
+          <p className="text-[#6b7280] text-[12px] break-all mb-4 leading-tight">
+            {selectedNode.data?.file || selectedNode.id.split(':')[0]}
           </p>
         </div>
         <button 
           onClick={onClose}
-          className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
+          className="text-gray-400 hover:text-white transition-colors flex-shrink-0 mt-1"
         >
           <X size={20} />
         </button>
@@ -159,12 +188,25 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
         {!isMigrating ? (
           <button
             onClick={handleMigrate}
-            className="w-full bg-[#3b82f6] hover:bg-blue-600 active:bg-blue-700 text-white font-bold h-[44px] rounded-[12px] transition-colors flex items-center justify-center mt-4"
+            className="w-full text-white font-semibold text-[15px] h-[44px] rounded-[8px] transition-all flex items-center justify-center mt-2 mb-4 hover:brightness-110"
+            style={{
+              background: 'linear-gradient(135deg, #3b82f6, #6366f1)'
+            }}
           >
             Migrate this function
           </button>
         ) : (
           <div className="flex flex-col gap-6 text-sm">
+            <button
+              disabled
+              className="w-full text-white font-semibold text-[15px] h-[44px] rounded-[8px] flex items-center justify-center mt-2 mb-4 opacity-60 cursor-not-allowed"
+              style={{
+                background: 'linear-gradient(135deg, #3b82f6, #6366f1)'
+              }}
+            >
+              <Loader2 className="animate-spin w-4 h-4 mr-2" />
+              Migrating...
+            </button>
             {/* Init Phase */}
             {events.find(e => e.stage === 'init' && e.status === 'running') && (
               <div className="flex items-center gap-2 text-gray-300">
@@ -176,8 +218,10 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
             {/* Propose Phase */}
             {(stageStates.propose || events.find(e => e.stage === 'ws' && e.status === 'connected')) && (
               <div className="flex flex-col gap-3">
-                <div className="text-[#888888] uppercase tracking-widest text-xs font-semibold mb-1">
-                  ── PROPOSE ──
+                <div className="flex items-center gap-2 text-[#374151] text-[11px] tracking-[0.15em] uppercase font-bold mb-1">
+                  <div className="h-px bg-[#374151] flex-1"></div>
+                  PROPOSE
+                  <div className="h-px bg-[#374151] flex-1"></div>
                 </div>
                 
                 {!stageStates.propose || stageStates.propose.status === 'running' ? (
@@ -192,27 +236,27 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
                   </div>
                 ) : stageStates.propose.status === 'done' ? (
                   <div className="flex flex-col gap-4">
-                    <div className="flex items-center gap-2 text-[#22c55e] font-medium">
+                    <div className="flex items-center gap-2 text-[#22c55e] text-[14px] font-semibold">
                       <CheckCircle className="w-4 h-4" />
                       Proposal ready
                     </div>
                     
-                    <div className="flex gap-2 w-full h-[180px]">
+                    <div className="flex gap-2 w-full">
                       {/* Before */}
-                      <div className="flex-1 flex flex-col min-w-0 border border-red-900/50 rounded-md overflow-hidden bg-[#1a0a0a]">
-                        <div className="bg-red-950/30 text-red-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wider border-b border-red-900/50">Before</div>
-                        <div className="flex-1 overflow-auto p-2">
-                          <pre className="text-red-200 font-mono text-[11px] leading-relaxed m-0 w-max pr-4">
+                      <div className="flex-1 flex flex-col min-w-0 border border-[#7f1d1d] rounded-md overflow-hidden bg-[#1a0505]">
+                        <div className="bg-[#7f1d1d]/30 text-red-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wide border-b border-[#7f1d1d]">BEFORE</div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 max-h-[160px] overflow-x-auto">
+                          <pre className="text-[#e2e8f0] font-mono text-[11px] whitespace-pre m-0 w-max pr-4">
                             {stageStates.propose.old_code}
                           </pre>
                         </div>
                       </div>
                       
                       {/* After */}
-                      <div className="flex-1 flex flex-col min-w-0 border border-green-900/50 rounded-md overflow-hidden bg-[#0a1a0a]">
-                        <div className="bg-green-950/30 text-green-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wider border-b border-green-900/50">After</div>
-                        <div className="flex-1 overflow-auto p-2">
-                          <pre className="text-green-200 font-mono text-[11px] leading-relaxed m-0 w-max pr-4">
+                      <div className="flex-1 flex flex-col min-w-0 border border-[#14532d] rounded-md overflow-hidden bg-[#052e16]">
+                        <div className="bg-[#14532d]/40 text-green-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wide border-b border-[#14532d]">AFTER</div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 max-h-[160px] overflow-x-auto">
+                          <pre className="text-[#e2e8f0] font-mono text-[11px] whitespace-pre m-0 w-max pr-4">
                             {stageStates.propose.new_code}
                           </pre>
                         </div>
@@ -226,13 +270,15 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
             {/* Verify Phase */}
             {stageStates.verify && (
               <div className="flex flex-col gap-3 mt-2">
-                <div className="text-[#888888] uppercase tracking-widest text-xs font-semibold mb-1">
-                  ── VERIFY ──
+                <div className="flex items-center gap-2 text-[#374151] text-[11px] tracking-[0.15em] uppercase font-bold mb-1">
+                  <div className="h-px bg-[#374151] flex-1"></div>
+                  VERIFY
+                  <div className="h-px bg-[#374151] flex-1"></div>
                 </div>
                 
                 {stageStates.verify.stub && (
-                  <div className="flex items-center gap-2 text-[#22c55e] font-medium">
-                    <CheckCircle className="w-4 h-4" />
+                  <div className="flex items-center gap-2 text-[#22c55e] font-medium text-[14px]">
+                    <CheckCircle className="w-5 h-5 fill-[#22c55e] text-black" />
                     Verification complete
                   </div>
                 )}
@@ -243,16 +289,28 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
                     {stageStates.verify.tests?.map((test, idx) => {
                       if (!test) return null;
                       
+                      let verifyMessage = "Test " + (test.test_index + 1) + (test.passed ? " passed" : " failed");
+                      let outcomeClass = test.passed ? "text-[#22c55e]" : "text-red-500 font-medium";
+                      
+                      if (test.outcome === 'matched_success') {
+                        verifyMessage = "✓ Output matched";
+                      } else if (test.outcome === 'matched_exception') {
+                        verifyMessage = "✓ Exception matched";
+                      } else if (test.outcome === 'mismatch') {
+                        verifyMessage = "✗ Output mismatch";
+                        outcomeClass = "text-[#ef4444] font-medium";
+                      }
+                      
                       return test.passed ? (
-                        <div key={idx} className="flex items-center gap-2 text-[#22c55e]">
+                        <div key={idx} className={`flex items-center gap-2 ${outcomeClass}`}>
                           <CheckCircle className="w-4 h-4" />
-                          Test {test.test_index + 1} passed
+                          {verifyMessage}
                         </div>
                       ) : (
                         <div key={idx} className="flex flex-col gap-2 border border-red-900/50 bg-red-950/20 p-3 rounded-md">
-                          <div className="flex items-center gap-2 text-red-500 font-medium">
+                          <div className={`flex items-center gap-2 ${outcomeClass}`}>
                             <XCircle className="w-4 h-4" />
-                            Test {test.test_index + 1} failed
+                            {verifyMessage}
                           </div>
                           
                           <div className="text-[11px] font-mono mt-1 space-y-1">
@@ -289,37 +347,37 @@ const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) 
             {/* Decide Phase */}
             {stageStates.decide && stageStates.decide.status !== 'running' && (
               <div className="flex flex-col gap-3 mt-2">
-                <div className="text-[#888888] uppercase tracking-widest text-xs font-semibold mb-1">
-                  ── DECIDE ──
+                <div className="flex items-center gap-2 text-[#374151] text-[11px] tracking-[0.15em] uppercase font-bold mb-1">
+                  <div className="h-px bg-[#374151] flex-1"></div>
+                  DECIDE
+                  <div className="h-px bg-[#374151] flex-1"></div>
                 </div>
                 
                 {stageStates.decide.stub ? (
-                  <div className="flex flex-col gap-2 border border-[#22c55e]/50 bg-[#22c55e]/10 p-4 rounded-md">
-                    <div className="text-[#22c55e] font-medium">✓ Migration verified — PR would be opened here</div>
-                    <div className="text-[#22c55e] font-bold mt-1">🎉 Ready to ship</div>
+                  <div className="flex flex-col border border-[#16a34a] bg-[#052e16] p-4 rounded-[8px] w-full mt-2">
+                    <div className="text-white text-[16px] font-bold mb-1">🎉 Migration Verified</div>
+                    <div className="text-[#a7f3d0] text-[14px]">PR would be opened here</div>
+                    <div className="text-[#22c55e] text-[14px] font-medium mt-3">Ready to ship →</div>
                   </div>
                 ) : stageStates.decide.action === 'pr_opened' ? (
-                  <div className="flex flex-col gap-3 border border-[#22c55e]/50 bg-[#22c55e]/10 p-4 rounded-md">
-                    <div className="text-[#22c55e] font-medium flex items-center gap-2">
-                      <CheckCircle className="w-5 h-5" />
-                      🎉 Migration verified — PR opened
-                    </div>
+                  <div className="flex flex-col border border-[#16a34a] bg-[#052e16] p-4 rounded-[8px] w-full mt-2">
+                    <div className="text-white text-[16px] font-bold mb-1">🎉 Migration Verified</div>
                     <a 
                       href={stageStates.decide.pr_url} 
                       target="_blank" 
                       rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 underline flex items-center gap-1 w-fit"
+                      className="text-[#60a5fa] hover:text-[#93c5fd] underline flex items-center gap-1 w-fit text-[14px]"
                     >
-                      View Pull Request <ExternalLink className="w-3 h-3" />
+                      {stageStates.decide.pr_url} <ExternalLink className="w-3 h-3" />
                     </a>
+                    <div className="text-[#22c55e] text-[14px] font-medium mt-3">Ready to ship →</div>
                   </div>
                 ) : stageStates.decide.action === 'blocked' ? (
-                  <div className="flex flex-col gap-2 border border-red-500/50 bg-red-500/10 p-4 rounded-md">
-                    <div className="text-red-400 font-medium flex items-center gap-2">
-                      <AlertTriangle className="w-5 h-5" />
-                      ⚠ Migration blocked
+                  <div className="flex flex-col gap-2 border border-[#d97706] bg-[#1c1400] p-4 rounded-[8px] w-full mt-2">
+                    <div className="text-[#fbbf24] font-bold flex items-center gap-2 text-[16px]">
+                      ⚠ Migration Blocked
                     </div>
-                    <div className="text-red-200 text-sm mt-1">
+                    <div className="text-[#9ca3af] text-[14px] mt-1">
                       {stageStates.decide.reason}
                     </div>
                   </div>

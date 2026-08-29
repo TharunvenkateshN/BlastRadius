@@ -255,7 +255,7 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                  new_code = source_code # Just use the exact same code to guarantee it passes
             else:
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.6-flash',
                     contents=[prompt, source_code],
                 )
                 
@@ -315,7 +315,7 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                 )
                 
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.6-flash',
                     contents=[prompt],
                 )
                 
