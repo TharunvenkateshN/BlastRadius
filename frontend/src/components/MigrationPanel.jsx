@@ -1,417 +1,450 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Loader2, CheckCircle, XCircle, AlertTriangle, ExternalLink } from 'lucide-react';
 
-const MigrationPanel = ({ selectedNode, repoUrl, onClose, onMigrationSuccess }) => {
+const sectionLabel = {
+  fontSize: '11px',
+  fontWeight: 600,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: 'var(--text-muted)',
+  marginBottom: '12px',
+};
+
+function PipelineStep({ label, state, children }) {
+  const dotStyle = {
+    width: '7px',
+    height: '7px',
+    borderRadius: '50%',
+    flexShrink: 0,
+    marginTop: '5px',
+    background: 'var(--line)',
+  };
+
+  let labelColor = 'var(--text-muted)';
+  if (state === 'active') {
+    dotStyle.background = 'var(--ember)';
+    dotStyle.boxShadow = '0 0 8px var(--ember)';
+    labelColor = 'var(--text-primary)';
+  } else if (state === 'done-pass') {
+    dotStyle.background = 'var(--safe)';
+    labelColor = 'var(--safe)';
+  } else if (state === 'done-fail') {
+    dotStyle.background = '#f87171';
+    labelColor = '#f87171';
+  }
+
+  return (
+    <div style={{ marginBottom: '16px' }}>
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+        <div style={dotStyle} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: '13px',
+              fontWeight: 500,
+              color: labelColor,
+              marginBottom: children ? '8px' : 0,
+            }}
+          >
+            {label}
+          </div>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DiffBlock({ oldCode, newCode }) {
+  const [expanded, setExpanded] = useState(true);
+  const oldLines = (oldCode || '').split('\n');
+  const newLines = (newCode || '').split('\n');
+
+  return (
+    <div style={{ marginTop: '6px' }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--text-muted)',
+          fontSize: '11px',
+          padding: 0,
+          marginBottom: '6px',
+          fontFamily: "'Space Grotesk', sans-serif",
+        }}
+      >
+        {expanded ? '▾' : '▸'} View diff
+      </button>
+      {expanded && (
+        <div
+          className="custom-scrollbar"
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: '11px',
+            background: 'var(--bg)',
+            border: '1px solid var(--line)',
+            borderRadius: '6px',
+            padding: '10px',
+            maxHeight: '160px',
+            overflowY: 'auto',
+          }}
+        >
+          {oldLines.map((line, i) => (
+            <div key={`old-${i}`} style={{ color: '#f87171' }}>
+              − {line}
+            </div>
+          ))}
+          {newLines.map((line, i) => (
+            <div key={`new-${i}`} style={{ color: '#86efac' }}>
+              + {line}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNodes }) {
+  const [pipeline, setPipeline] = useState({
+    propose: 'idle',
+    verify: 'idle',
+    decide: 'idle',
+  });
+  const [proposeData, setProposeData] = useState(null);
+  const [verifyTests, setVerifyTests] = useState([]);
+  const [verifyTotal, setVerifyTotal] = useState(0);
+  const [decideData, setDecideData] = useState(null);
   const [isMigrating, setIsMigrating] = useState(false);
-  const [events, setEvents] = useState([]);
-  const [stageStates, setStageStates] = useState({});
-  const bottomRef = useRef(null);
+  const [impactWidth, setImpactWidth] = useState(0);
   const wsRef = useRef(null);
 
   useEffect(() => {
-    // Reset state when node changes
+    setPipeline({ propose: 'idle', verify: 'idle', decide: 'idle' });
+    setProposeData(null);
+    setVerifyTests([]);
+    setVerifyTotal(0);
+    setDecideData(null);
     setIsMigrating(false);
-    setEvents([]);
-    setStageStates({});
-    
-    // Cleanup any existing websocket
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-  }, [selectedNode?.id]);
+  }, [node?.id]);
 
   useEffect(() => {
-    // Auto-scroll to bottom as new events come in
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (blastRadiusData && rawNodes.length > 0) {
+      const pct = (blastRadiusData.affected.length / rawNodes.length) * 100;
+      requestAnimationFrame(() => setImpactWidth(pct));
+    } else {
+      setImpactWidth(0);
     }
-  }, [events, stageStates]);
+  }, [blastRadiusData, rawNodes.length]);
 
-  const handleMigrate = async () => {
-    if (!selectedNode || !repoUrl) return;
-    
+  const runMigration = async () => {
+    if (!node || !repoUrl) return;
+
     setIsMigrating(true);
-    setEvents([{ stage: 'init', status: 'running', message: 'Initializing migration...' }]);
-    
+    setPipeline({ propose: 'active', verify: 'idle', decide: 'idle' });
+    setProposeData(null);
+    setVerifyTests([]);
+    setDecideData(null);
+
     try {
-      // Step 1: POST to start migration
       const response = await fetch('http://localhost:8000/api/migrate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          node_id: selectedNode.id,
-          repo: repoUrl
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_id: node.id, repo: repoUrl }),
       });
 
       if (!response.ok) {
         throw new Error(`Failed to start migration: ${response.statusText}`);
       }
-      
-      setEvents(prev => [...prev, { stage: 'init', status: 'done', message: 'Migration initialized' }]);
 
-      // Step 2: Connect WebSocket
-      const wsUrl = `ws://localhost:8000/ws/migrate/${selectedNode.id}?repo=${encodeURIComponent(repoUrl)}`;
+      const wsUrl = `ws://localhost:8000/ws/migrate/${node.id}?repo=${encodeURIComponent(repoUrl)}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
-
-      ws.onopen = () => {
-        setEvents(prev => [...prev, { stage: 'ws', status: 'connected', message: 'Connected to migration stream' }]);
-      };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          
-          setStageStates(prev => {
-            const newState = { ...prev };
-            
-            // Handle PROPOSE
-            if (data.stage === 'propose') {
-              if (data.status === 'running') {
-                newState.propose = { ...data };
-              } else if (data.status === 'done' || data.status === 'error') {
-                newState.propose = { ...data };
-              }
+
+          if (data.stage === 'propose') {
+            if (data.status === 'running') {
+              setPipeline((p) => ({ ...p, propose: 'active' }));
+            } else if (data.status === 'done') {
+              setProposeData(data);
+              setPipeline((p) => ({ ...p, propose: 'done-pass', verify: 'active' }));
+            } else if (data.status === 'error') {
+              setPipeline((p) => ({ ...p, propose: 'done-fail' }));
+              setProposeData(data);
             }
-            
-            // Handle VERIFY
-            if (data.stage === 'verify') {
-              if (!newState.verify) {
-                newState.verify = { tests: [], status: data.status };
-              } else {
-                newState.verify.status = data.status;
-              }
-              
-              if (data.status === 'running') {
-                newState.verify.current = { index: data.test_index, total: data.total };
-              } else if (data.status === 'done' && data.test_index !== undefined) {
-                // Ensure array is large enough
-                const tests = [...(newState.verify.tests || [])];
-                tests[data.test_index] = data;
-                newState.verify.tests = tests;
-              } else if (data.status === 'stub') {
-                newState.verify.stub = true;
-              }
+          }
+
+          if (data.stage === 'verify') {
+            if (data.status === 'running' && data.total !== undefined) {
+              setVerifyTotal(data.total);
+              setPipeline((p) => ({ ...p, verify: 'active' }));
+            } else if (data.status === 'done' && data.test_index !== undefined) {
+              setVerifyTests((prev) => {
+                const next = [...prev];
+                next[data.test_index] = data;
+                return next;
+              });
             }
-            
-            // Handle DECIDE
-            if (data.stage === 'decide') {
-              newState.decide = { ...data };
-              
-              if (data.status === 'done' && data.action === 'pr_opened') {
-                if (onMigrationSuccess) onMigrationSuccess(selectedNode.id);
-              } else if (data.status === 'stub') {
-                if (onMigrationSuccess) onMigrationSuccess(selectedNode.id);
-              }
-            }
-            
-            return newState;
-          });
-          
+          }
+
+          if (data.stage === 'decide') {
+            setDecideData(data);
+            const failed = data.action === 'blocked' || data.action === 'pr_failed';
+            setPipeline((p) => ({
+              ...p,
+              verify: p.verify === 'active' ? 'done-pass' : p.verify,
+              decide: failed ? 'done-fail' : 'done-pass',
+            }));
+            setIsMigrating(false);
+          }
         } catch (err) {
-          console.error("Error parsing websocket message:", err);
+          console.error('WebSocket parse error:', err);
         }
       };
 
-      ws.onerror = (error) => {
-        setEvents(prev => [...prev, { stage: 'ws', status: 'error', message: 'WebSocket connection error' }]);
+      ws.onerror = () => {
+        setPipeline((p) => ({ ...p, propose: 'done-fail' }));
+        setIsMigrating(false);
       };
 
       ws.onclose = () => {
-        setEvents(prev => [...prev, { stage: 'ws', status: 'closed', message: 'Migration stream closed' }]);
+        setIsMigrating(false);
       };
-
     } catch (err) {
-      setEvents(prev => [...prev, { stage: 'error', status: 'error', message: err.message }]);
+      console.error('Migration error:', err);
+      setPipeline((p) => ({ ...p, propose: 'done-fail' }));
+      setIsMigrating(false);
     }
   };
 
-  if (!selectedNode) {
-    return (
-      <div className="fixed right-0 top-0 w-[440px] h-screen bg-[#0a0a0a] border-l border-[#1f2937] z-10 flex flex-col items-center justify-center p-8 text-center animate-slide-in">
-        <div className="text-[48px] mb-4">⚡</div>
-        <h2 className="text-white text-[18px] font-bold mb-2">Select a function</h2>
-        <p className="text-[#6b7280] text-[14px] max-w-[280px] leading-relaxed">
-          Click any node in the graph to inspect it and migrate it safely using AI.
-        </p>
-      </div>
-    );
-  }
+  const maxDepth = blastRadiusData?.maxDepth ?? 0;
+  const affectedCount = blastRadiusData?.affected?.length ?? 0;
 
-  const isSuccess = stageStates.decide && (stageStates.decide.stub || stageStates.decide.action === 'pr_opened');
+  const verifyLabel =
+    pipeline.verify === 'idle'
+      ? 'Verify'
+      : verifyTotal > 0
+        ? `Verify [${verifyTests.filter(Boolean).length}/${verifyTotal} tests]`
+        : 'Verify';
 
   return (
-    <div 
-      className="fixed right-0 top-0 w-[440px] h-screen bg-[#111111] border-l border-[#222222] z-10 flex flex-col shadow-2xl animate-slide-in overflow-hidden relative"
+    <aside
+      style={{
+        width: '320px',
+        background: 'var(--bg-panel)',
+        borderLeft: '1px solid var(--line)',
+        padding: '28px 22px',
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
     >
-      {/* Confetti Animation */}
-      {isSuccess && (
-        <div className="absolute inset-0 pointer-events-none overflow-hidden z-50">
-          {[...Array(6)].map((_, i) => (
-            <div 
-              key={i} 
-              className="confetti-piece"
-              style={{
-                left: `${15 + i * 15}%`,
-                backgroundColor: ['#ef4444', '#3b82f6', '#22c55e', '#eab308'][i % 4],
-                animationDelay: `${i * 0.1}s`
-              }}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="flex-none p-6 border-b border-[#1f2937] flex justify-between items-start bg-[#0f172a]">
-        <div className="min-w-0 pr-4">
-          <h2 className="text-white text-[20px] font-bold truncate" title={selectedNode.data?.label || selectedNode.id}>
-            {selectedNode.data?.label || selectedNode.id.split(':').pop()}
-          </h2>
-          <p className="text-[#6b7280] text-[12px] break-all mb-4 leading-tight">
-            {selectedNode.data?.file || selectedNode.id.split(':')[0]}
-          </p>
-        </div>
-        <button 
-          onClick={onClose}
-          className="text-gray-400 hover:text-white transition-colors flex-shrink-0 mt-1"
+      {!node ? (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            color: 'var(--text-muted)',
+            fontSize: '13px',
+            lineHeight: 1.6,
+            padding: '0 12px',
+          }}
         >
-          <X size={20} />
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 bg-[#111111] flex flex-col">
-        {!isMigrating ? (
-          <button
-            onClick={handleMigrate}
-            className="w-full text-white font-semibold text-[15px] h-[44px] rounded-[8px] transition-all flex items-center justify-center mt-2 mb-4 hover:brightness-110"
-            style={{
-              background: 'linear-gradient(135deg, #3b82f6, #6366f1)'
-            }}
-          >
-            Migrate this function
-          </button>
-        ) : (
-          <div className="flex flex-col gap-6 text-sm">
-            <button
-              disabled
-              className="w-full text-white font-semibold text-[15px] h-[44px] rounded-[8px] flex items-center justify-center mt-2 mb-4 opacity-60 cursor-not-allowed"
+          Select a node to inspect its blast radius, or press migrate to run the
+          agent pipeline live.
+        </div>
+      ) : (
+        <>
+          {/* Node identity */}
+          <div style={{ marginBottom: '24px' }}>
+            <div
               style={{
-                background: 'linear-gradient(135deg, #3b82f6, #6366f1)'
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: '14px',
+                fontWeight: 500,
+                color: 'var(--ember)',
+                marginBottom: '6px',
+                wordBreak: 'break-all',
               }}
             >
-              <Loader2 className="animate-spin w-4 h-4 mr-2" />
-              Migrating...
-            </button>
-            {/* Init Phase */}
-            {events.find(e => e.stage === 'init' && e.status === 'running') && (
-              <div className="flex items-center gap-2 text-gray-300">
-                <Loader2 className="animate-spin w-4 h-4 text-blue-500" />
-                Initializing migration...
-              </div>
-            )}
-
-            {/* Propose Phase */}
-            {(stageStates.propose || events.find(e => e.stage === 'ws' && e.status === 'connected')) && (
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-2 text-[#374151] text-[11px] tracking-[0.15em] uppercase font-bold mb-1">
-                  <div className="h-px bg-[#374151] flex-1"></div>
-                  PROPOSE
-                  <div className="h-px bg-[#374151] flex-1"></div>
-                </div>
-                
-                {!stageStates.propose || stageStates.propose.status === 'running' ? (
-                  <div className="flex items-center gap-2 text-gray-300">
-                    <Loader2 className="animate-spin w-4 h-4 text-blue-500" />
-                    Proposing refactored version...
-                  </div>
-                ) : stageStates.propose.status === 'error' ? (
-                  <div className="flex items-start gap-2 text-red-500">
-                    <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                    <span>Error: {stageStates.propose.message}</span>
-                  </div>
-                ) : stageStates.propose.status === 'done' ? (
-                  <div className="flex flex-col gap-4">
-                    <div className="flex items-center gap-2 text-[#22c55e] text-[14px] font-semibold">
-                      <CheckCircle className="w-4 h-4" />
-                      Proposal ready
-                    </div>
-                    
-                    <div className="flex gap-2 w-full">
-                      {/* Before */}
-                      <div className="flex-1 flex flex-col min-w-0 border border-[#7f1d1d] rounded-md overflow-hidden bg-[#1a0505]">
-                        <div className="bg-[#7f1d1d]/30 text-red-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wide border-b border-[#7f1d1d]">BEFORE</div>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 max-h-[160px] overflow-x-auto">
-                          <pre className="text-[#e2e8f0] font-mono text-[11px] whitespace-pre m-0 w-max pr-4">
-                            {stageStates.propose.old_code}
-                          </pre>
-                        </div>
-                      </div>
-                      
-                      {/* After */}
-                      <div className="flex-1 flex flex-col min-w-0 border border-[#14532d] rounded-md overflow-hidden bg-[#052e16]">
-                        <div className="bg-[#14532d]/40 text-green-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wide border-b border-[#14532d]">AFTER</div>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 max-h-[160px] overflow-x-auto">
-                          <pre className="text-[#e2e8f0] font-mono text-[11px] whitespace-pre m-0 w-max pr-4">
-                            {stageStates.propose.new_code}
-                          </pre>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            )}
-
-            {/* Verify Phase */}
-            {stageStates.verify && (
-              <div className="flex flex-col gap-3 mt-2">
-                <div className="flex items-center gap-2 text-[#374151] text-[11px] tracking-[0.15em] uppercase font-bold mb-1">
-                  <div className="h-px bg-[#374151] flex-1"></div>
-                  VERIFY
-                  <div className="h-px bg-[#374151] flex-1"></div>
-                </div>
-                
-                {stageStates.verify.stub && (
-                  <div className="flex items-center gap-2 text-[#22c55e] font-medium text-[14px]">
-                    <CheckCircle className="w-5 h-5 fill-[#22c55e] text-black" />
-                    Verification complete
-                  </div>
-                )}
-                
-                {!stageStates.verify.stub && (
-                  <div className="flex flex-col gap-2">
-                    {/* Render completed tests */}
-                    {stageStates.verify.tests?.map((test, idx) => {
-                      if (!test) return null;
-                      
-                      let verifyMessage = "Test " + (test.test_index + 1) + (test.passed ? " passed" : " failed");
-                      let outcomeClass = test.passed ? "text-[#22c55e]" : "text-red-500 font-medium";
-                      
-                      if (test.outcome === 'matched_success') {
-                        verifyMessage = "✓ Output matched";
-                      } else if (test.outcome === 'matched_exception') {
-                        verifyMessage = "✓ Exception matched";
-                      } else if (test.outcome === 'mismatch') {
-                        verifyMessage = "✗ Output mismatch";
-                        outcomeClass = "text-[#ef4444] font-medium";
-                      }
-                      
-                      return test.passed ? (
-                        <div key={idx} className={`flex items-center gap-2 ${outcomeClass}`}>
-                          <CheckCircle className="w-4 h-4" />
-                          {verifyMessage}
-                        </div>
-                      ) : (
-                        <div key={idx} className="flex flex-col gap-2 border border-red-900/50 bg-red-950/20 p-3 rounded-md">
-                          <div className={`flex items-center gap-2 ${outcomeClass}`}>
-                            <XCircle className="w-4 h-4" />
-                            {verifyMessage}
-                          </div>
-                          
-                          <div className="text-[11px] font-mono mt-1 space-y-1">
-                            <div className="text-gray-400">Input:</div>
-                            <div className="text-gray-300 bg-[#111] p-1 rounded">{test.input}</div>
-                            
-                            <div className="flex gap-2 mt-2">
-                              <div className="flex-1">
-                                <div className="text-red-400 mb-1">Old Output:</div>
-                                <div className="text-red-300 bg-red-950/40 p-1 rounded break-all whitespace-pre-wrap">{test.old_output}</div>
-                              </div>
-                              <div className="flex-1">
-                                <div className="text-green-400 mb-1">New Output:</div>
-                                <div className="text-green-300 bg-green-950/40 p-1 rounded break-all whitespace-pre-wrap">{test.new_output}</div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    
-                    {/* Render current running test */}
-                    {stageStates.verify.status === 'running' && stageStates.verify.current && (
-                      <div className="flex items-center gap-2 text-gray-300">
-                        <Loader2 className="animate-spin w-4 h-4 text-blue-500" />
-                        Verifying test {stageStates.verify.current.index + 1} of {stageStates.verify.current.total}...
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Decide Phase */}
-            {stageStates.decide && stageStates.decide.status !== 'running' && (
-              <div className="flex flex-col gap-3 mt-2">
-                <div className="flex items-center gap-2 text-[#374151] text-[11px] tracking-[0.15em] uppercase font-bold mb-1">
-                  <div className="h-px bg-[#374151] flex-1"></div>
-                  DECIDE
-                  <div className="h-px bg-[#374151] flex-1"></div>
-                </div>
-                
-                {stageStates.decide.stub ? (
-                  <div className="flex flex-col border border-[#16a34a] bg-[#052e16] p-4 rounded-[8px] w-full mt-2">
-                    <div className="text-white text-[16px] font-bold mb-1">🎉 Migration Verified</div>
-                    <div className="text-[#a7f3d0] text-[14px]">PR would be opened here</div>
-                    <div className="text-[#22c55e] text-[14px] font-medium mt-3">Ready to ship →</div>
-                  </div>
-                ) : stageStates.decide.action === 'pr_opened' ? (
-                  <div className="flex flex-col border border-[#16a34a] bg-[#052e16] p-4 rounded-[8px] w-full mt-2">
-                    <div className="text-white text-[16px] font-bold mb-1">🎉 Migration Verified</div>
-                    <a 
-                      href={stageStates.decide.pr_url} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-[#60a5fa] hover:text-[#93c5fd] underline flex items-center gap-1 w-fit text-[14px]"
-                    >
-                      {stageStates.decide.pr_url} <ExternalLink className="w-3 h-3" />
-                    </a>
-                    <div className="text-[#22c55e] text-[14px] font-medium mt-3">Ready to ship →</div>
-                  </div>
-                ) : stageStates.decide.action === 'blocked' ? (
-                  <div className="flex flex-col gap-2 border border-[#d97706] bg-[#1c1400] p-4 rounded-[8px] w-full mt-2">
-                    <div className="text-[#fbbf24] font-bold flex items-center gap-2 text-[16px]">
-                      ⚠ Migration Blocked
-                    </div>
-                    <div className="text-[#9ca3af] text-[14px] mt-1">
-                      {stageStates.decide.reason}
-                    </div>
-                  </div>
-                ) : stageStates.decide.action === 'pr_failed' ? (
-                  <div className="flex flex-col gap-3 border border-orange-500/50 bg-orange-500/10 p-4 rounded-md">
-                    <div className="text-orange-400 font-medium flex items-center gap-2">
-                      <AlertTriangle className="w-5 h-5" />
-                      PR creation failed — diff ready to apply manually
-                    </div>
-                    <div className="text-orange-200 text-sm">
-                      {stageStates.decide.reason}
-                    </div>
-                    
-                    {stageStates.decide.diff && (
-                      <div className="mt-2 flex flex-col border border-orange-900/50 rounded-md overflow-hidden bg-[#1a110a]">
-                        <div className="bg-orange-950/30 text-orange-400 text-[10px] px-2 py-1 font-mono uppercase tracking-wider border-b border-orange-900/50">Diff</div>
-                        <div className="overflow-auto p-2 max-h-[150px]">
-                          <pre className="text-gray-300 font-mono text-[11px] leading-relaxed m-0 w-max pr-4">
-                            {stageStates.decide.diff}
-                          </pre>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            )}
-            
-            <div ref={bottomRef} />
+              {node.name || node.id.split(':').pop()}
+            </div>
+            <div
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: '11.5px',
+                color: 'var(--text-muted)',
+                wordBreak: 'break-all',
+              }}
+            >
+              {node.file || node.id.split(':')[0]}
+            </div>
           </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
-export default MigrationPanel;
+          {/* Blast radius impact bar */}
+          {blastRadiusData && (
+            <div style={{ marginBottom: '24px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '11.5px',
+                  color: 'var(--text-secondary)',
+                  marginBottom: '8px',
+                }}
+              >
+                <span>Blast radius</span>
+                <span
+                  style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                >
+                  {affectedCount} nodes · depth {maxDepth}
+                </span>
+              </div>
+              <div
+                style={{
+                  height: '6px',
+                  background: 'var(--line-soft)',
+                  borderRadius: '3px',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${impactWidth}%`,
+                    background: 'linear-gradient(90deg, var(--warn), var(--ember))',
+                    borderRadius: '3px',
+                    transition: 'width 0.6s ease-out',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Migrate button */}
+          <button
+            onClick={runMigration}
+            disabled={isMigrating}
+            style={{
+              width: '100%',
+              background: isMigrating ? '#cc5530' : 'var(--ember)',
+              color: '#1a0a03',
+              fontWeight: 600,
+              fontSize: '13.5px',
+              fontFamily: "'Space Grotesk', sans-serif",
+              border: 'none',
+              borderRadius: '8px',
+              padding: '12px 16px',
+              cursor: isMigrating ? 'not-allowed' : 'pointer',
+              marginBottom: '28px',
+            }}
+          >
+            {isMigrating ? 'Migrating…' : '▸ Migrate this node'}
+          </button>
+
+          {/* Agent pipeline */}
+          <div>
+            <div style={sectionLabel}>Agent Pipeline</div>
+
+            <PipelineStep
+              label="Propose"
+              state={pipeline.propose}
+            >
+              {proposeData?.status === 'done' && (
+                <DiffBlock oldCode={proposeData.old_code} newCode={proposeData.new_code} />
+              )}
+              {proposeData?.status === 'error' && (
+                <div style={{ fontSize: '11px', color: '#f87171' }}>
+                  {proposeData.message}
+                </div>
+              )}
+            </PipelineStep>
+
+            <PipelineStep label={verifyLabel} state={pipeline.verify}>
+              {verifyTests.filter(Boolean).map((test, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: '11px',
+                    color: test.passed ? 'var(--safe)' : '#f87171',
+                    marginBottom: '6px',
+                  }}
+                >
+                  {test.passed ? '✓' : '✗'} input: {test.input} → expected{' '}
+                  {test.old_output}, got {test.new_output}
+                </div>
+              ))}
+            </PipelineStep>
+
+            <PipelineStep label="Decide" state={pipeline.decide}>
+              {decideData?.action === 'pr_opened' && (
+                <div>
+                  <div style={{ color: 'var(--safe)', fontSize: '13px', marginBottom: '6px' }}>
+                    PR opened ✓
+                  </div>
+                  <a
+                    href={decideData.pr_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: '11.5px',
+                      color: 'var(--safe)',
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    {decideData.pr_url}
+                  </a>
+                </div>
+              )}
+              {decideData?.action === 'blocked' && (
+                <div style={{ color: '#f87171', fontSize: '12px' }}>
+                  Blocked — {decideData.reason}
+                </div>
+              )}
+              {decideData?.action === 'pr_failed' && (
+                <div>
+                  <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>
+                    PR failed — {decideData.reason}
+                  </div>
+                  {decideData.diff && (
+                    <pre
+                      className="custom-scrollbar"
+                      style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: '11px',
+                        background: 'var(--bg)',
+                        border: '1px solid var(--line)',
+                        borderRadius: '6px',
+                        padding: '10px',
+                        maxHeight: '160px',
+                        overflowY: 'auto',
+                        color: 'var(--text-secondary)',
+                        whiteSpace: 'pre-wrap',
+                        margin: 0,
+                      }}
+                    >
+                      {decideData.diff}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </PipelineStep>
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}
