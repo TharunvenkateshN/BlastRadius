@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar';
 import GraphCanvas from './components/GraphCanvas';
 import MigrationPanel from './components/MigrationPanel';
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 function App() {
   const [repoUrl, setRepoUrl] = useState('https://github.com/pallets/click');
   const [rawNodes, setRawNodes] = useState([]);
@@ -28,7 +30,7 @@ function App() {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/graph?url=${encodeURIComponent(url)}&include_tests=false`
+        `${API_BASE}/api/graph?url=${encodeURIComponent(url)}&include_tests=false`
       );
       if (!response.ok) {
         throw new Error(`Server returned ${response.status}: ${response.statusText}`);
@@ -52,7 +54,7 @@ function App() {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/blast-radius?node_id=${encodeURIComponent(node.id)}&repo=${encodeURIComponent(repoUrl)}`
+        `${API_BASE}/api/blast-radius?node_id=${encodeURIComponent(node.id)}&repo=${encodeURIComponent(repoUrl)}`
       );
       if (!response.ok) {
         throw new Error(`Server returned ${response.status}`);
