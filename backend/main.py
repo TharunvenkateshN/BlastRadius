@@ -195,7 +195,7 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
             )
             
             response = client.models.generate_content(
-                model='gemini-3.1-pro',
+                model='gemini-3.6-flash',
                 contents=[prompt, source_code],
             )
             

@@ -205,6 +205,24 @@ function App() {
     });
   };
 
+  const handleMigrationSuccess = (nodeId) => {
+    setNodes(nds => nds.map(n => {
+      if (n.id === nodeId) {
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            label: n.data.label.startsWith("✓ ") ? n.data.label : "✓ " + n.data.label,
+            bgColor: '#00C853',
+            borderColor: '#00e676',
+            boxShadow: '0 0 15px rgba(0, 200, 83, 0.5)'
+          }
+        };
+      }
+      return n;
+    }));
+  };
+
   return (
     <div className="w-full h-screen bg-[#0a0a0a] text-white flex flex-col font-sans">
       <TopBar 
@@ -253,6 +271,7 @@ function App() {
           selectedNode={selectedNode}
           repoUrl={repoUrl}
           onClose={resetNodeColors}
+          onMigrationSuccess={handleMigrationSuccess}
         />
       </div>
     </div>
