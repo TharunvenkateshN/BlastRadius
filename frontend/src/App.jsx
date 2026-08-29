@@ -9,6 +9,7 @@ function App() {
   const [rawNodes, setRawNodes] = useState([]);
   const [rawEdges, setRawEdges] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
+  const [previousNode, setPreviousNode] = useState(null);
   const [blastRadiusData, setBlastRadiusData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -19,6 +20,7 @@ function App() {
     setAnalyzing(true);
     setLoading(true);
     setSelectedNode(null);
+    setPreviousNode(null);
     setBlastRadiusData(null);
     setVisibleCount(0);
     setRawNodes([]);
@@ -45,8 +47,7 @@ function App() {
     }
   };
 
-  const handleNodeClick = async (node) => {
-    setSelectedNode(node);
+  const fetchBlastRadius = async (node) => {
     setBlastRadiusData(null);
 
     try {
@@ -67,8 +68,26 @@ function App() {
     }
   };
 
+  const handleNodeClick = async (node) => {
+    setPreviousNode(selectedNode);
+    setSelectedNode(node);
+    await fetchBlastRadius(node);
+  };
+
+  const handleBack = async () => {
+    if (previousNode) {
+      const target = previousNode;
+      setSelectedNode(target);
+      setPreviousNode(null);
+      await fetchBlastRadius(target);
+    } else {
+      handleReset();
+    }
+  };
+
   const handleReset = () => {
     setSelectedNode(null);
+    setPreviousNode(null);
     setBlastRadiusData(null);
   };
 
@@ -99,8 +118,10 @@ function App() {
         onNodeClick={handleNodeClick}
         blastRadiusData={blastRadiusData}
         selectedNode={selectedNode}
+        previousNode={previousNode}
         repoUrl={repoUrl}
         onReset={handleReset}
+        onBack={handleBack}
         onVisibleCountChange={setVisibleCount}
         loading={loading}
       />

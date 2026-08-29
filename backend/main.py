@@ -25,6 +25,21 @@ from app.graph_engine.parser import build_graph
 
 app = FastAPI(title="BlastRadius Backend API")
 
+# Printed once at process boot so it's obvious in the terminal (and via
+# GET /api/config below) whether a restart actually picked up code changes —
+# a stale --reload-less process silently keeps serving old code otherwise.
+_resolved_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+print(f"[BlastRadius] Boot: using Gemini model '{_resolved_gemini_model}'")
+
+
+@app.get("/api/config")
+def get_config():
+    # Masked fingerprint only — enough to confirm which key a running
+    # process actually loaded at boot without exposing the secret itself.
+    key = os.getenv("GEMINI_API_KEY") or ""
+    key_fingerprint = f"...{key[-6:]}" if len(key) >= 6 else "(not set)"
+    return {"gemini_model": _resolved_gemini_model, "gemini_api_key_fingerprint": key_fingerprint}
+
 # Setup CORS to allow everything for local testing and Vite frontend
 origins = [
     "http://localhost:5173",
@@ -239,7 +254,7 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
         try:
             from google import genai
             from google.genai import types
-            
+
             client = genai.Client(api_key=api_key)
             
             prompt = (
@@ -254,11 +269,15 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
             elif skip_llm:
                  new_code = source_code # Just use the exact same code to guarantee it passes
             else:
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=[prompt, source_code],
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=_resolved_gemini_model,
+                        contents=[prompt, source_code],
+                    ),
+                    timeout=45,
                 )
-                
+
                 new_code = response.text.strip()
                 
                 # Remove markdown fences if the model still added them
@@ -314,11 +333,15 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                     f"Source code:\n{source_code}"
                 )
                 
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=[prompt],
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=_resolved_gemini_model,
+                        contents=[prompt],
+                    ),
+                    timeout=45,
                 )
-                
+
                 inputs_text = response.text.strip()
                 if inputs_text.startswith("```json"):
                      inputs_text = inputs_text[7:]

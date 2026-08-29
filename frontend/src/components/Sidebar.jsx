@@ -54,6 +54,7 @@ function Sidebar({
 
   return (
     <aside
+      className="hide-scrollbar"
       style={{
         width: '300px',
         background: 'var(--bg-panel)',

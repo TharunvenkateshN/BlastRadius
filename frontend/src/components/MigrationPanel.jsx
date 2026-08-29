@@ -237,6 +237,7 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
 
   return (
     <aside
+      className="hide-scrollbar"
       style={{
         width: '320px',
         background: 'var(--bg-panel)',
