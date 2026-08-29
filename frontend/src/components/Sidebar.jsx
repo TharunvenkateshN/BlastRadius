@@ -86,7 +86,7 @@ function Sidebar({
             color: 'var(--text-primary)',
           }}
         >
-          BlastRadius
+          Ripple
         </span>
       </div>
 

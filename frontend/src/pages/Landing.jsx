@@ -42,7 +42,7 @@ const Landing = () => {
 
         <div className="relative z-10 flex flex-col items-center text-center px-6">
           <h1 className="text-[72px] font-extrabold text-white leading-tight tracking-tight mb-6">
-            BlastRadius
+            Ripple
           </h1>
           <p className="text-[22px] text-[#9ca3af] max-w-[600px] leading-relaxed mb-12">
             Understand the true impact of every code change — before you make it.
@@ -77,7 +77,7 @@ const Landing = () => {
             </svg>
             <h3 className="text-white text-[18px] font-semibold mb-[8px]">Paste any GitHub repo URL</h3>
             <p className="text-[#6b7280] text-[14px] leading-[1.6]">
-              BlastRadius clones and parses the entire codebase using static analysis — no setup, no tokens needed.
+              Ripple clones and parses the entire codebase using static analysis — no setup, no tokens needed.
             </p>
           </div>
 
