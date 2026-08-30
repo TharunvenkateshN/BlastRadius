@@ -362,7 +362,7 @@ export default function GraphCanvas({
           Click any node to explore its blast radius
         </text>
       )}
-      {hubNodes.map((node) => {
+      {hubNodes.map((node, i) => {
         const pos = hubPositions[node.id];
         const isHovered = hovered?.id === node.id;
         const hue = nodeHue(node);
@@ -468,7 +468,7 @@ export default function GraphCanvas({
             const style = ringNodeColor(hue, bucket);
             return (
               <g
-                key={id}
+                key={`${bucketStr}-${id}-${i}`}
                 style={{
                   cursor: 'pointer',
                   animation: `fade-in-ring 0.3s ease-out ${(bucket - 1) * 150}ms both`,
@@ -522,12 +522,12 @@ export default function GraphCanvas({
           })}
 
         {/* Dormant nodes (behind origin) */}
-        {dormantCandidates.map((node) => {
+        {dormantCandidates.map((node, i) => {
           const pos = dormantPositions[node.id];
           const isHovered = hovered?.id === node.id;
           return (
             <g
-              key={`dormant-${node.id}`}
+              key={`dormant-${node.id}-${i}`}
               style={{ cursor: 'pointer' }}
               onClick={() => handleNodeClick(node, pos.x, pos.y)}
               onMouseEnter={() => setHovered({ id: node.id, x: pos.x, y: pos.y, r: 6 })}

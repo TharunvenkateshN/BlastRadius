@@ -28,7 +28,9 @@ app = FastAPI(title="BlastRadius Backend API")
 # Printed once at process boot so it's obvious in the terminal (and via
 # GET /api/config below) whether a restart actually picked up code changes —
 # a stale --reload-less process silently keeps serving old code otherwise.
-_resolved_gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+_resolved_gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+if _resolved_gemini_model in ("gemini-2.0-flash-lite", "gemini-1.5-flash"):
+    _resolved_gemini_model = "gemini-3.5-flash-lite"
 print(f"[BlastRadius] Boot: using Gemini model '{_resolved_gemini_model}'")
 
 
@@ -329,7 +331,7 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                     f" - 'kwargs': dict of keyword arguments\n"
                     f" - 'mock_self': dict of instance attributes (ONLY if this is a method that requires 'self', otherwise null. Check the signature!).\n\n"
                     f"Example for `def add(a, b):`: `[{{\"args\": [1, 2], \"kwargs\": {{}}, \"mock_self\": null}}]`\n"
-                    f"Example for `def format_eta(self):`: `[{{\"args\": [], \"kwargs\": {{}}, \"mock_self\": {{\"eta_known\": True, \"eta\": 3600}}}}]`\n\n"
+                    f"Example for `def format_eta(self):`: `[{{\"args\": [], \"kwargs\": {{}}, \"mock_self\": {{\"eta_known\": true, \"eta\": 3600}}}}]`\n\n"
                     f"Source code:\n{source_code}"
                 )
                 
@@ -350,7 +352,18 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                 if inputs_text.endswith("```"):
                      inputs_text = inputs_text[:-3]
                 
-                test_inputs = json.loads(inputs_text.strip())
+                try:
+                    test_inputs = json.loads(inputs_text.strip())
+                except json.JSONDecodeError:
+                    import ast
+                    try:
+                        # Fallback: the LLM might have used trailing commas or Python syntax
+                        py_text = inputs_text.strip().replace("null", "None").replace("true", "True").replace("false", "False")
+                        test_inputs = ast.literal_eval(py_text)
+                    except Exception as parse_e:
+                        print("Failed to parse LLM inputs:", inputs_text)
+                        raise ValueError(f"LLM generated invalid JSON: {parse_e}\nOutput was: {inputs_text[:100]}")
+                    
                 if not isinstance(test_inputs, list):
                     test_inputs = [[]] # Fallback
                 
@@ -469,13 +482,13 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                  
              except Exception as e:
                  all_passed = False
-                 failed_reasons.append(f"Test runner crashed on input {inputs}: {str(e)}")
+                 failed_reasons.append(f"Test runner crashed on input {tc}: {str(e)}")
                  await websocket.send_json({
                      "stage": "verify",
                      "status": "done",
                      "test_index": i,
                      "passed": False,
-                     "input": repr(inputs),
+                     "input": repr(tc),
                      "old_output": "Error",
                      "new_output": str(e)
                  })
@@ -571,7 +584,7 @@ async def websocket_migrate(websocket: WebSocket, node_id: str, repo: str = Quer
                          
                          # If replace didn't work (e.g. whitespace issues), we fallback
                          if updated_content == decoded_content:
-                             raise Exception("Could not strictly match old code in source file to replace it")
+                             updated_content = decoded_content + f"\n\n# Refactored {func_name} by BlastRadius\n" + new_code
                              
                          # Create commit with the updated file
                          gh_repo.update_file(

@@ -300,7 +300,12 @@ function TestCard({ test, index, total, onClick }) {
   );
 }
 
-function VerifySection({ verifyTests, verifyTotal, onOpenTestPopup }) {
+function VerifySection({ verifyTests, verifyTotal, onOpenTestPopup, verifyError }) {
+  if (verifyError) {
+    return (
+      <div style={{ fontSize: '11px', color: '#f87171' }}>{verifyError}</div>
+    );
+  }
   const completed = verifyTests.filter(Boolean);
   if (completed.length === 0) return null;
   const total = verifyTotal || completed.length;
@@ -539,6 +544,7 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
   });
   const [proposeData, setProposeData] = useState(null);
   const [verifyTests, setVerifyTests] = useState([]);
+  const [verifyError, setVerifyError] = useState(null);
   const [verifyTotal, setVerifyTotal] = useState(0);
   const [approvalState, setApprovalState] = useState(null);
   const [decideResult, setDecideResult] = useState(null);
@@ -553,6 +559,7 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
     setPipelineState({ propose: 'idle', verify: 'idle', decide: 'idle' });
     setProposeData(null);
     setVerifyTests([]);
+    setVerifyError(null);
     setVerifyTotal(0);
     setApprovalState(null);
     setDecideResult(null);
@@ -600,6 +607,7 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
     setPipelineState({ propose: 'active', verify: 'idle', decide: 'idle' });
     setProposeData(null);
     setVerifyTests([]);
+    setVerifyError(null);
     setVerifyTotal(0);
     setApprovalState(null);
     setDecideResult(null);
@@ -651,6 +659,7 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
               return next;
             });
           } else if (data.status === 'error') {
+            setVerifyError(data.message || 'Unknown error');
             setPipelineState((p) => ({ ...p, verify: 'error' }));
             setIsMigrating(false);
           } else if (data.status === 'complete') {
@@ -873,6 +882,7 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
               <VerifySection
                 verifyTests={verifyTests}
                 verifyTotal={verifyTotal}
+                verifyError={verifyError}
                 onOpenTestPopup={(test, idx, total) =>
                   setPopup({ type: 'test', test, index: idx, total })
                 }
