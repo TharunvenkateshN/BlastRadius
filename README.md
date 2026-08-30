@@ -406,3 +406,13 @@ MIT License · Built at BuildSprint 2026
 *If a change ripples through your codebase, you should see it before it ships.*
 
 </div>
+
+## Team
+
+Built at BuildSprint 2026 in 48 hours by two engineers from Amrita Vishwa Vidyapeetham, Coimbatore.
+
+| | |
+|---|---|
+| **Tharun N V** — Backend & Intelligence | **Poornachandran** — Frontend & Experience |
+| Graph engine, AST parsing, agent pipeline (Propose → Verify → Decide), FastAPI + WebSocket API | React UI, SVG graph visualization, blast radius animation, migration panel, demo curation |
+| [github.com/TharunvenkateshN](https://github.com/TharunvenkateshN)| [github.com/poornachandran2006](https://github.com/poornachandran2006) |
