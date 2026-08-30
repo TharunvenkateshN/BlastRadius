@@ -28,7 +28,7 @@ app = FastAPI(title="BlastRadius Backend API")
 # Printed once at process boot so it's obvious in the terminal (and via
 # GET /api/config below) whether a restart actually picked up code changes —
 # a stale --reload-less process silently keeps serving old code otherwise.
-_resolved_gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+_resolved_gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 print(f"[BlastRadius] Boot: using Gemini model '{_resolved_gemini_model}'")
 
 
