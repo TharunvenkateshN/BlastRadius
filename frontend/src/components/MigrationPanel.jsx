@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const WS_BASE = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000';
+
 const sectionLabel = {
   fontSize: '11px',
   fontWeight: 600,
@@ -612,20 +615,18 @@ export default function MigrationPanel({ node, blastRadiusData, repoUrl, rawNode
     setApprovalState(null);
     setDecideResult(null);
 
-    try {
-      const response = await fetch('http://localhost:8000/api/migrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ node_id: node.id, repo: repoUrl }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to start migration: ${response.statusText}`);
-      }
-
-      const wsUrl = `ws://localhost:8000/ws/migrate/${encodeNodeId(node.id)}?repo=${encodeURIComponent(repoUrl)}`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+   try {
+  const response = await fetch(`${API_BASE}/api/migrate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_id: node.id, repo: repoUrl }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to start migration: ${response.statusText}`);
+  }
+  const wsUrl = `${WS_BASE}/ws/migrate/${encodeNodeId(node.id)}?repo=${encodeURIComponent(repoUrl)}`;
+  const ws = new WebSocket(wsUrl);
+  wsRef.current = ws;
 
       ws.onmessage = (event) => {
         let data;
